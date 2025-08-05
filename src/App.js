@@ -1,7 +1,7 @@
-import React, { useState, useEffect, createContext, useContext, useRef } from 'react';
+import React, { useState, useEffect, createContext, useContext, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signOut } from 'firebase/auth';
-import { getFirestore, doc, collection, onSnapshot, addDoc, updateDoc, deleteDoc, query, where, setDoc, getDocs } from 'firebase/firestore';
+import { getFirestore, doc, collection, onSnapshot, addDoc, updateDoc, deleteDoc, setDoc, getDocs } from 'firebase/firestore';
 
 // Konfigurasi Firebase dari Environment Variables
 const firebaseConfig = process.env.REACT_APP_FIREBASE_CONFIG ? JSON.parse(process.env.REACT_APP_FIREBASE_CONFIG) : {};
@@ -104,11 +104,11 @@ const AppProvider = ({ children }) => {
             const productsRef = collection(db, `artifacts/${appId}/public/data/products`);
             const expensesRef = collection(db, `artifacts/${appId}/public/data/expenses`);
             const storeSettingsRef = doc(db, `artifacts/${appId}/public/data/storeSettings`, 'main');
-
+            
             const unsubscribeOrders = onSnapshot(ordersRef, (snapshot) => setOrders(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
             const unsubscribeProducts = onSnapshot(productsRef, (snapshot) => setProducts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
             const unsubscribeExpenses = onSnapshot(expensesRef, (snapshot) => setExpenses(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
-
+            
             const unsubscribeStoreSettings = onSnapshot(storeSettingsRef, (doc) => {
                 if (doc.exists()) {
                     setStoreSettings(doc.data());
@@ -259,28 +259,30 @@ const OrdersPage = () => {
     const handleAddOrderItem = () => setCurrentOrder(prev => ({ ...prev, items: [...prev.items, { productId: '', quantity: 1, width: 0, height: 0 }] }));
     const handleUpdateOrderItem = (index, key, value) => setCurrentOrder(prev => ({ ...prev, items: prev.items.map((item, i) => i === index ? { ...item, [key]: value } : item) }));
     const handleRemoveOrderItem = (index) => setCurrentOrder(prev => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }));
-    const calculateItemPrice = (item) => {
+    
+    const calculateItemPrice = useCallback((item) => {
         const product = products.find(p => p.id === item.productId);
         if (!product) return 0;
         switch (product.calculationMethod) {
-            case 'dimensi': return item.width * item.height * product.price;
+            case 'dimensi': return (item.width || 0) * (item.height || 0) * product.price;
             case 'paket':
-            case 'satuan': return item.quantity * product.price;
+            case 'satuan': return (item.quantity || 0) * product.price;
             default: return 0;
         }
-    };
+    }, [products]);
 
     useEffect(() => {
         const total = currentOrder.items.reduce((acc, item) => acc + calculateItemPrice(item), 0);
         setCurrentOrder(prev => ({ ...prev, totalCost: total }));
-    }, [currentOrder.items, products]);
+    }, [currentOrder.items, calculateItemPrice]);
 
     const handleSubmitOrder = async (e) => {
         e.preventDefault();
         if (!db) return;
         try {
             if (isEditing) {
-                await updateDoc(doc(db, `artifacts/${appId}/public/data/orders`, currentOrder.id), { ...currentOrder, items: JSON.stringify(currentOrder.items), updatedAt: new Date().toISOString() });
+                const { id, ...orderData } = currentOrder;
+                await updateDoc(doc(db, `artifacts/${appId}/public/data/orders`, id), { ...orderData, items: JSON.stringify(orderData.items), updatedAt: new Date().toISOString() });
                 setMessage('Pesanan berhasil diperbarui!');
             } else {
                 const orderId = generateOrderId();
@@ -327,7 +329,7 @@ const OrdersPage = () => {
             {message && <div className="bg-green-100 text-green-700 p-3 rounded-lg mb-4">{message}</div>}
             <form onSubmit={handleSubmitOrder} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div><label className="block text-gray-700">Nama Pemesan</label><input type="text" value={currentOrder.customerName} onChange={(e) => setCurrentOrder({ ...currentOrder, customerName: e.target.value })} className="w-full p-2 border border-gray-300 rounded-lg" required /></div>
-                <div className="md:col-span-2"><h3 className="text-xl font-semibold mt-4 mb-2">Item Pesanan</h3>{currentOrder.items.map((item, index) => (<div key={index} className="flex flex-wrap items-center space-x-2 mb-2 p-2 bg-gray-50 rounded-lg border"><select value={item.productId} onChange={(e) => handleUpdateOrderItem(index, 'productId', e.target.value)} className="flex-grow p-2 border rounded-lg mb-2 md:mb-0" required><option value="">Pilih Produk</option>{products.length > 0 ? products.map(product => (<option key={product.id} value={product.id}>{product.name} ({product.calculationMethod})</option>)) : (<option value="" disabled>Belum ada produk</option>)}</select>{products.find(p => p.id === item.productId)?.calculationMethod === 'dimensi' ? (<><input type="number" step="0.01" placeholder="Lebar (cm)" value={item.width} onChange={(e) => handleUpdateOrderItem(index, 'width', parseFloat(e.target.value) || 0)} className="w-24 p-2 border rounded-lg mb-2 md:mb-0" required /><input type="number" step="0.01" placeholder="Tinggi (cm)" value={item.height} onChange={(e) => handleUpdateOrderItem(index, 'height', parseFloat(e.target.value) || 0)} className="w-24 p-2 border rounded-lg mb-2 md:mb-0" required /></>) : (<input type="number" placeholder="Jumlah" value={item.quantity} onChange={(e) => handleUpdateOrderItem(index, 'quantity', parseInt(e.target.value, 10) || 1)} className="w-24 p-2 border rounded-lg mb-2 md:mb-0" required />)}<span className="text-sm font-semibold text-gray-700">Rp {calculateItemPrice(item).toLocaleString('id-ID')}</span><button type="button" onClick={() => handleRemoveOrderItem(index)} className="bg-red-500 text-white p-2 rounded-lg hover:bg-red-600">Hapus</button></div>))}<button type="button" onClick={handleAddOrderItem} className="mt-2 w-full bg-green-500 text-white p-2 rounded-lg hover:bg-green-600">Tambah Item</button></div>
+                <div className="md:col-span-2"><h3 className="text-xl font-semibold mt-4 mb-2">Item Pesanan</h3>{currentOrder.items.map((item, index) => (<div key={index} className="flex flex-wrap items-center space-x-2 mb-2 p-2 bg-gray-50 rounded-lg border"><select value={item.productId} onChange={(e) => handleUpdateOrderItem(index, 'productId', e.target.value)} className="flex-grow p-2 border rounded-lg mb-2 md:mb-0" required><option value="">Pilih Produk</option>{products.length > 0 ? products.map(product => (<option key={product.id} value={product.id}>{product.name} ({product.calculationMethod})</option>)) : (<option value="" disabled>Belum ada produk</option>)}</select>{products.find(p => p.id === item.productId)?.calculationMethod === 'dimensi' ? (<><input type="number" step="0.01" placeholder="Lebar (cm)" value={item.width || ''} onChange={(e) => handleUpdateOrderItem(index, 'width', parseFloat(e.target.value) || 0)} className="w-24 p-2 border rounded-lg mb-2 md:mb-0" required /><input type="number" step="0.01" placeholder="Tinggi (cm)" value={item.height || ''} onChange={(e) => handleUpdateOrderItem(index, 'height', parseFloat(e.target.value) || 0)} className="w-24 p-2 border rounded-lg mb-2 md:mb-0" required /></>) : (<input type="number" placeholder="Jumlah" value={item.quantity || ''} onChange={(e) => handleUpdateOrderItem(index, 'quantity', parseInt(e.target.value, 10) || 1)} className="w-24 p-2 border rounded-lg mb-2 md:mb-0" required />)}<span className="text-sm font-semibold text-gray-700">Rp {calculateItemPrice(item).toLocaleString('id-ID')}</span><button type="button" onClick={() => handleRemoveOrderItem(index)} className="bg-red-500 text-white p-2 rounded-lg hover:bg-red-600">Hapus</button></div>))}<button type="button" onClick={handleAddOrderItem} className="mt-2 w-full bg-green-500 text-white p-2 rounded-lg hover:bg-green-600">Tambah Item</button></div>
                 <div className="md:col-span-2 mt-4"><p className="text-xl font-bold text-right">Total Biaya: Rp {currentOrder.totalCost.toLocaleString('id-ID')}</p></div>
                 <div className="md:col-span-2"><button type="submit" className="w-full bg-blue-500 text-white font-bold py-2 rounded-lg hover:bg-blue-600">{isEditing ? 'Simpan Perubahan' : 'Simpan Pesanan'}</button></div>
             </form>
@@ -337,13 +339,415 @@ const OrdersPage = () => {
     );
 };
 
-// ... (Sisa komponen: PaymentsPage, ExpensesPage, ReportsPage, AccountManagementPage, ProductManagementPage, StoreManagementPage)
-// Sisa komponen tidak saya sertakan di sini untuk keringkasan, tapi logikanya sama persis dengan kode asli Anda.
-// Cukup salin-tempel sisa komponen dari kode asli Anda ke bagian bawah file App.js ini.
-const PaymentsPage = () => { /* ... Kode dari versi sebelumnya ... */ return <div className="bg-white rounded-xl shadow-lg p-6">Halaman Pembayaran</div>; };
-const ExpensesPage = () => { /* ... Kode dari versi sebelumnya ... */ return <div className="bg-white rounded-xl shadow-lg p-6">Halaman Pengeluaran</div>; };
-const ReportsPage = () => { /* ... Kode dari versi sebelumnya ... */ return <div className="bg-white rounded-xl shadow-lg p-6">Halaman Laporan</div>; };
-const AccountManagementPage = () => { /* ... Kode dari versi sebelumnya ... */ return <div className="bg-white rounded-xl shadow-lg p-6">Halaman Manajemen Akun</div>; };
-const ProductManagementPage = () => { /* ... Kode dari versi sebelumnya ... */ return <div className="bg-white rounded-xl shadow-lg p-6">Halaman Manajemen Produk</div>; };
-const StoreManagementPage = () => { /* ... Kode dari versi sebelumnya ... */ return <div className="bg-white rounded-xl shadow-lg p-6">Halaman Manajemen Toko</div>; };
+const PaymentsPage = () => {
+    const { db, appId, orders, products } = useContext(AppContext);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResults, setSearchResults] = useState([]);
+    const [selectedOrder, setSelectedOrder] = useState(null);
+    const [paidAmount, setPaidAmount] = useState(0);
+    const [message, setMessage] = useState('');
 
+    const handleSearch = (e) => {
+        e.preventDefault();
+        const queryLower = searchQuery.toLowerCase();
+        const results = orders.filter(o => o.id.toLowerCase().includes(queryLower) || o.customerName.toLowerCase().includes(queryLower));
+        setSearchResults(results);
+        setSelectedOrder(null);
+        setMessage(results.length === 0 ? 'Tidak ada pesanan yang ditemukan.' : '');
+    };
+
+    const handleSelectOrder = (order) => {
+        setSelectedOrder(order);
+        setPaidAmount(order.paidAmount || 0);
+    };
+
+    const handleSettlePayment = async () => {
+        if (!db || !selectedOrder) return;
+        try {
+            const orderDocRef = doc(db, `artifacts/${appId}/public/data/orders`, selectedOrder.id);
+            const newPaidAmount = paidAmount;
+            const newPaymentStatus = newPaidAmount >= selectedOrder.totalCost ? 'Lunas' : 'Belum Lunas';
+            await updateDoc(orderDocRef, {
+                paymentStatus: newPaymentStatus,
+                paidAmount: newPaidAmount,
+                updatedAt: new Date().toISOString(),
+                paymentMethod: 'Cash',
+            });
+            setMessage('Pembayaran berhasil diperbarui!');
+            setSelectedOrder(null);
+            setSearchResults([]);
+            setSearchQuery('');
+            setTimeout(() => setMessage(''), 3000);
+        } catch (error) {
+            console.error("Error updating payment:", error);
+            setMessage('Gagal memperbarui status pembayaran.');
+        }
+    };
+
+    const change = selectedOrder ? paidAmount - selectedOrder.totalCost : 0;
+    
+    return (
+        <div className="bg-white rounded-xl shadow-lg p-6">
+            <h2 className="text-2xl font-bold mb-4">Pembayaran Pesanan</h2>
+            {message && <div className={`p-3 rounded-lg mb-4 ${message.includes('Gagal') ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{message}</div>}
+            <form onSubmit={handleSearch} className="flex space-x-2 mb-6">
+                <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Cari ID Pesanan atau Nama Pelanggan" className="flex-grow p-2 border border-gray-300 rounded-lg" required />
+                <button type="submit" className="bg-blue-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors">Cari</button>
+            </form>
+            {searchResults.length > 0 && !selectedOrder && (
+                <div className="mb-4"><h3 className="text-lg font-semibold mb-2">Hasil Pencarian:</h3><div className="max-h-60 overflow-y-auto border border-gray-200 rounded-lg">{searchResults.map(order => (<button key={order.id} onClick={() => handleSelectOrder(order)} className="w-full text-left p-3 hover:bg-gray-100 border-b last:border-b-0"><p className="font-bold">ID: {order.id}</p><p>Nama: {order.customerName}</p></button>))}</div></div>
+            )}
+            {selectedOrder && (
+                <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                    <h3 className="text-xl font-bold mb-2">Detail Pesanan: {selectedOrder.id}</h3>
+                    <p><strong>Nama Pemesan:</strong> {selectedOrder.customerName}</p>
+                    <p><strong>Total Biaya:</strong> Rp {selectedOrder.totalCost.toLocaleString('id-ID')}</p>
+                    <div className="mt-4"><h4 className="font-semibold">Item:</h4><ul className="list-disc list-inside">{JSON.parse(selectedOrder.items).map((item, index) => (<li key={index}>{products.find(p => p.id === item.productId)?.name || 'N/A'} - Qty: {item.quantity}</li>))}</ul></div>
+                    <div className="mt-4"><label className="block text-gray-700">Jumlah Dibayarkan (IDR)</label><input type="number" value={paidAmount} onChange={(e) => setPaidAmount(parseFloat(e.target.value) || 0)} className="w-full p-2 border border-gray-300 rounded-lg" /></div>
+                    <div className="mt-4 p-4 rounded-xl text-center font-bold">{change >= 0 ? (<div className="bg-green-100 text-green-700"><p className="text-lg">Kembalian: Rp {change.toLocaleString('id-ID')}</p></div>) : (<div className="bg-red-100 text-red-700"><p className="text-lg">Sisa Hutang: Rp {Math.abs(change).toLocaleString('id-ID')}</p></div>)}</div>
+                    <div className="mt-6 flex justify-end space-x-3"><button onClick={() => setSelectedOrder(null)} className="bg-gray-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-gray-600">Batal</button><button onClick={handleSettlePayment} className="bg-green-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-600">Simpan Pembayaran</button></div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+const ExpensesPage = () => {
+    const { db, appId, expenses, userRole } = useContext(AppContext);
+    const [description, setDescription] = useState('');
+    const [cost, setCost] = useState(0);
+    const [message, setMessage] = useState('');
+    const [modal, setModal] = useState({ show: false, action: null, itemId: null });
+
+    const handleSubmitExpense = async (e) => {
+        e.preventDefault();
+        if (!db) return;
+        try {
+            await addDoc(collection(db, `artifacts/${appId}/public/data/expenses`), { description, cost, createdAt: new Date().toISOString() });
+            setMessage('Pengeluaran berhasil ditambahkan!');
+            setDescription(''); setCost(0);
+            setTimeout(() => setMessage(''), 3000);
+        } catch (error) {
+            console.error("Error adding expense:", error);
+            setMessage('Gagal menyimpan pengeluaran.');
+        }
+    };
+
+    const handleDeleteExpense = async (id) => {
+        if (!db) return;
+        try {
+            await deleteDoc(doc(db, `artifacts/${appId}/public/data/expenses`, id));
+            setMessage('Pengeluaran berhasil dihapus.');
+            setTimeout(() => setMessage(''), 3000);
+        } catch (error) {
+            console.error("Error deleting expense:", error);
+            setMessage('Gagal menghapus pengeluaran.');
+        }
+        setModal({ show: false, action: null, itemId: null });
+    };
+
+    return (
+        <div className="bg-white rounded-xl shadow-lg p-6">
+            <h2 className="text-2xl font-bold mb-4">Transaksi Pengeluaran</h2>
+            {message && <div className="bg-green-100 text-green-700 p-3 rounded-lg mb-4">{message}</div>}
+            <form onSubmit={handleSubmitExpense} className="space-y-4">
+                <div><label className="block text-gray-700">Deskripsi</label><input type="text" value={description} onChange={(e) => setDescription(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg" required /></div>
+                <div><label className="block text-gray-700">Biaya</label><input type="number" value={cost} onChange={(e) => setCost(parseFloat(e.target.value) || 0)} className="w-full p-2 border border-gray-300 rounded-lg" required /></div>
+                <button type="submit" className="w-full bg-blue-500 text-white font-bold py-2 rounded-lg hover:bg-blue-600">Tambah Pengeluaran</button>
+            </form>
+            <div className="mt-8">
+                <h2 className="text-2xl font-bold mb-4">Daftar Pengeluaran</h2>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full bg-white rounded-lg shadow">
+                        <thead><tr className="bg-gray-200 text-gray-600 uppercase text-sm leading-normal"><th className="py-3 px-6 text-left">Deskripsi</th><th className="py-3 px-6 text-left">Biaya</th><th className="py-3 px-6 text-left">Tanggal</th>{(userRole === 'superviser' || userRole === 'owner') && <th className="py-3 px-6 text-left">Aksi</th>}</tr></thead>
+                        <tbody className="text-gray-600 text-sm font-light">
+                            {expenses.map(expense => (
+                                <tr key={expense.id} className="border-b border-gray-200 hover:bg-gray-100">
+                                    <td className="py-3 px-6 text-left">{expense.description}</td>
+                                    <td className="py-3 px-6 text-left">Rp {expense.cost.toLocaleString('id-ID')}</td>
+                                    <td className="py-3 px-6 text-left">{new Date(expense.createdAt).toLocaleDateString()}</td>
+                                    {(userRole === 'superviser' || userRole === 'owner') && (<td className="py-3 px-6 text-left"><button onClick={() => setModal({ show: true, action: () => handleDeleteExpense(expense.id), itemId: expense.id })} className="text-red-500 hover:text-red-700">Hapus</button></td>)}
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <Modal show={modal.show} title="Konfirmasi Hapus" message="Apakah Anda yakin ingin menghapus pengeluaran ini?" onConfirm={modal.action} onCancel={() => setModal({ show: false, action: null, itemId: null })} />
+        </div>
+    );
+};
+
+const ReportsPage = () => {
+    const { orders, expenses } = useContext(AppContext);
+    const [reportType, setReportType] = useState('daily');
+    const [filteredOrders, setFilteredOrders] = useState([]);
+    const [filteredExpenses, setFilteredExpenses] = useState([]);
+
+    useEffect(() => {
+        const now = new Date();
+        let start, end;
+        if (reportType === 'daily') {
+            start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+        } else if (reportType === 'monthly') {
+            start = new Date(now.getFullYear(), now.getMonth(), 1);
+            end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        } else { // yearly
+            start = new Date(now.getFullYear(), 0, 1);
+            end = new Date(now.getFullYear() + 1, 0, 1);
+        }
+        setFilteredOrders(orders.filter(o => new Date(o.createdAt) >= start && new Date(o.createdAt) < end));
+        setFilteredExpenses(expenses.filter(e => new Date(e.createdAt) >= start && new Date(e.createdAt) < end));
+    }, [orders, expenses, reportType]);
+
+    const cashIn = filteredOrders.filter(o => o.paymentStatus === 'Lunas').reduce((acc, o) => acc + o.paidAmount, 0);
+    const totalSales = filteredOrders.reduce((acc, o) => acc + o.totalCost, 0);
+    const totalExpenses = filteredExpenses.reduce((acc, e) => acc + e.cost, 0);
+    const profit = totalSales - totalExpenses;
+    const cashFlow = cashIn - totalExpenses;
+
+    const downloadReport = () => {
+        const headers = ["Tipe", "Tanggal", "Deskripsi", "Jumlah"];
+        let csvContent = "data:text/csv;charset=utf-8," + headers.join(",") + "\n";
+        filteredOrders.forEach(o => csvContent += ["Penjualan", new Date(o.createdAt).toLocaleDateString(), `Pesanan ${o.customerName}`, o.totalCost].join(",") + "\n");
+        filteredExpenses.forEach(e => csvContent += ["Pengeluaran", new Date(e.createdAt).toLocaleDateString(), e.description, -e.cost].join(",") + "\n");
+        const link = document.createElement("a");
+        link.setAttribute("href", encodeURI(csvContent));
+        link.setAttribute("download", `laporan_${reportType}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
+    return (
+        <div className="bg-white rounded-xl shadow-lg p-6">
+            <h2 className="text-2xl font-bold mb-4">Laporan Keuangan</h2>
+            <div className="flex space-x-4 mb-4">
+                <button onClick={() => setReportType('daily')} className={`px-4 py-2 rounded-lg ${reportType === 'daily' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}>Harian</button>
+                <button onClick={() => setReportType('monthly')} className={`px-4 py-2 rounded-lg ${reportType === 'monthly' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}>Bulanan</button>
+                <button onClick={() => setReportType('yearly')} className={`px-4 py-2 rounded-lg ${reportType === 'yearly' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}>Tahunan</button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4 text-center">
+                <div className="bg-blue-100 p-4 rounded-lg"><h3 className="text-xl font-semibold">Total Penjualan</h3><p className="text-2xl font-bold">Rp {totalSales.toLocaleString('id-ID')}</p></div>
+                <div className="bg-red-100 p-4 rounded-lg"><h3 className="text-xl font-semibold">Total Pengeluaran</h3><p className="text-2xl font-bold">Rp {totalExpenses.toLocaleString('id-ID')}</p></div>
+                <div className="bg-green-100 p-4 rounded-lg"><h3 className="text-xl font-semibold">Keuntungan (P&L)</h3><p className="text-2xl font-bold">Rp {profit.toLocaleString('id-ID')}</p></div>
+                <div className="bg-purple-100 p-4 rounded-lg"><h3 className="text-xl font-semibold">Arus Kas Bersih</h3><p className="text-2xl font-bold">Rp {cashFlow.toLocaleString('id-ID')}</p></div>
+            </div>
+            <button onClick={downloadReport} className="mb-4 bg-green-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-green-600">Unduh Laporan CSV</button>
+            <h3 className="text-xl font-bold mt-6 mb-2">Detail Transaksi Penjualan</h3>
+            <div className="overflow-x-auto"><table className="min-w-full bg-white rounded-lg shadow"><thead><tr className="bg-gray-200 text-gray-600 uppercase text-sm leading-normal"><th className="py-3 px-6 text-left">Tanggal</th><th className="py-3 px-6 text-left">Nama Pemesan</th><th className="py-3 px-6 text-left">Total Biaya</th><th className="py-3 px-6 text-left">Status</th></tr></thead><tbody className="text-gray-600 text-sm font-light">{filteredOrders.map(o => (<tr key={o.id} className="border-b border-gray-200 hover:bg-gray-100"><td className="py-3 px-6 text-left">{new Date(o.createdAt).toLocaleDateString()}</td><td className="py-3 px-6 text-left">{o.customerName}</td><td className="py-3 px-6 text-left">Rp {o.totalCost.toLocaleString('id-ID')}</td><td className="py-3 px-6 text-left">{o.paymentStatus}</td></tr>))}</tbody></table></div>
+            <h3 className="text-xl font-bold mt-6 mb-2">Detail Transaksi Pengeluaran</h3>
+            <div className="overflow-x-auto"><table className="min-w-full bg-white rounded-lg shadow"><thead><tr className="bg-gray-200 text-gray-600 uppercase text-sm leading-normal"><th className="py-3 px-6 text-left">Tanggal</th><th className="py-3 px-6 text-left">Deskripsi</th><th className="py-3 px-6 text-left">Biaya</th></tr></thead><tbody className="text-gray-600 text-sm font-light">{filteredExpenses.map(e => (<tr key={e.id} className="border-b border-gray-200 hover:bg-gray-100"><td className="py-3 px-6 text-left">{new Date(e.createdAt).toLocaleDateString()}</td><td className="py-3 px-6 text-left">{e.description}</td><td className="py-3 px-6 text-left">Rp {e.cost.toLocaleString('id-ID')}</td></tr>))}</tbody></table></div>
+        </div>
+    );
+};
+
+const AccountManagementPage = () => {
+    const { db, appId, users, userId } = useContext(AppContext);
+    const [username, setUsername] = useState('');
+    const [password, setPassword] = useState('');
+    const [role, setRole] = useState('kasir');
+    const [message, setMessage] = useState('');
+    const [modal, setModal] = useState({ show: false, action: null, itemId: null });
+
+    const handleAddUser = async (e) => {
+        e.preventDefault();
+        if (!db) return;
+        try {
+            await addDoc(collection(db, `artifacts/${appId}/public/data/users`), { username, password, role, createdAt: new Date().toISOString(), userId: null });
+            setMessage('Akun berhasil ditambahkan!');
+            setUsername(''); setPassword(''); setRole('kasir');
+            setTimeout(() => setMessage(''), 3000);
+        } catch (error) {
+            console.error("Error adding user:", error);
+            setMessage('Gagal menambahkan akun.');
+        }
+    };
+
+    const handleDeleteUser = async (id) => {
+        if (!db) return;
+        try {
+            await deleteDoc(doc(db, `artifacts/${appId}/public/data/users`, id));
+            setMessage('Akun berhasil dihapus.');
+            setTimeout(() => setMessage(''), 3000);
+        } catch (error) {
+            console.error("Error deleting user:", error);
+            setMessage('Gagal menghapus akun.');
+        }
+        setModal({ show: false, action: null, itemId: null });
+    };
+
+    return (
+        <div className="bg-white rounded-xl shadow-lg p-6">
+            <h2 className="text-2xl font-bold mb-4">Manajemen Akun</h2>
+            {message && <div className="bg-green-100 text-green-700 p-3 rounded-lg mb-4">{message}</div>}
+            <form onSubmit={handleAddUser} className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                <div><label className="block text-gray-700">Username</label><input type="text" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg" required /></div>
+                <div><label className="block text-gray-700">Password</label><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg" required /></div>
+                <div><label className="block text-gray-700">Role</label><select value={role} onChange={(e) => setRole(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg"><option value="kasir">Kasir</option><option value="desainer">Desainer</option><option value="superviser">Superviser</option><option value="owner">Owner</option></select></div>
+                <div className="md:col-span-3"><button type="submit" className="w-full bg-blue-500 text-white font-bold py-2 rounded-lg hover:bg-blue-600">Tambah Akun Baru</button></div>
+            </form>
+            <h3 className="text-xl font-bold mb-2">Daftar Akun</h3>
+            <div className="overflow-x-auto">
+                <table className="min-w-full bg-white rounded-lg shadow">
+                    <thead><tr className="bg-gray-200 text-gray-600 uppercase text-sm leading-normal"><th className="py-3 px-6 text-left">Username</th><th className="py-3 px-6 text-left">Role</th><th className="py-3 px-6 text-left">User ID</th><th className="py-3 px-6 text-left">Aksi</th></tr></thead>
+                    <tbody className="text-gray-600 text-sm font-light">
+                        {users.map(user => (<tr key={user.id} className="border-b border-gray-200 hover:bg-gray-100"><td className="py-3 px-6 text-left">{user.username}</td><td className="py-3 px-6 text-left">{user.role}</td><td className="py-3 px-6 text-left">{user.userId || 'N/A'}</td><td className="py-3 px-6 text-left">{user.userId !== userId && (<button onClick={() => setModal({ show: true, action: () => handleDeleteUser(user.id), itemId: user.id })} className="text-red-500 hover:text-red-700">Hapus</button>)}</td></tr>))}
+                    </tbody>
+                </table>
+            </div>
+            <Modal show={modal.show} title="Konfirmasi Hapus" message="Apakah Anda yakin ingin menghapus akun ini?" onConfirm={modal.action} onCancel={() => setModal({ show: false, action: null, itemId: null })} />
+        </div>
+    );
+};
+
+const ProductManagementPage = () => {
+    const { db, appId, products } = useContext(AppContext);
+    const [isEditing, setIsEditing] = useState(false);
+    const [currentProduct, setCurrentProduct] = useState({ id: '', name: '', price: 0, calculationMethod: 'satuan' });
+    const [message, setMessage] = useState('');
+    const [modal, setModal] = useState({ show: false, action: null, itemId: null });
+
+    const handleAddOrUpdateProduct = async (e) => {
+        e.preventDefault();
+        if (!db) return;
+        try {
+            if (isEditing) {
+                const { id, ...productData } = currentProduct;
+                const productDocRef = doc(db, `artifacts/${appId}/public/data/products`, id);
+                await updateDoc(productDocRef, { ...productData, updatedAt: new Date().toISOString() });
+                setMessage('Produk berhasil diperbarui!');
+            } else {
+                const { id, ...newProductData } = currentProduct;
+                await addDoc(collection(db, `artifacts/${appId}/public/data/products`), { ...newProductData, createdAt: new Date().toISOString() });
+                setMessage('Produk berhasil ditambahkan!');
+            }
+            handleResetForm();
+            setTimeout(() => setMessage(''), 3000);
+        } catch (error) {
+            console.error("Error saving product:", error);
+            setMessage('Gagal menyimpan produk.');
+        }
+    };
+
+    const handleEditProduct = (product) => {
+        setCurrentProduct(product);
+        setIsEditing(true);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+
+    const handleDeleteProduct = async (id) => {
+        if (!db) return;
+        try {
+            await deleteDoc(doc(db, `artifacts/${appId}/public/data/products`, id));
+            setMessage('Produk berhasil dihapus.');
+            setTimeout(() => setMessage(''), 3000);
+        } catch (error) {
+            console.error("Error deleting product:", error);
+            setMessage('Gagal menghapus produk.');
+        }
+        setModal({ show: false, action: null, itemId: null });
+    };
+    
+    const handleResetForm = () => {
+        setCurrentProduct({ id: '', name: '', price: 0, calculationMethod: 'satuan' });
+        setIsEditing(false);
+    };
+
+    return (
+        <div className="bg-white rounded-xl shadow-lg p-6">
+            <h2 className="text-2xl font-bold mb-4">{isEditing ? 'Edit Produk' : 'Tambah Produk'}</h2>
+            {message && <div className="bg-green-100 text-green-700 p-3 rounded-lg mb-4">{message}</div>}
+            <form onSubmit={handleAddOrUpdateProduct} className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+                <div><label className="block text-gray-700">Nama Produk</label><input type="text" value={currentProduct.name} onChange={(e) => setCurrentProduct({ ...currentProduct, name: e.target.value })} className="w-full p-2 border rounded-lg" required /></div>
+                <div><label className="block text-gray-700">Harga per Unit</label><input type="number" step="0.01" value={currentProduct.price} onChange={(e) => setCurrentProduct({ ...currentProduct, price: parseFloat(e.target.value) || 0 })} className="w-full p-2 border rounded-lg" required /></div>
+                <div><label className="block text-gray-700">Metode Hitung</label><select value={currentProduct.calculationMethod} onChange={(e) => setCurrentProduct({ ...currentProduct, calculationMethod: e.target.value })} className="w-full p-2 border rounded-lg"><option value="dimensi">Dimensi</option><option value="paket">Paket</option><option value="satuan">Satuan</option></select></div>
+                <div className="flex items-end space-x-2"><button type="submit" className="w-full bg-blue-500 text-white font-bold py-2 rounded-lg hover:bg-blue-600">{isEditing ? 'Simpan' : 'Tambah'}</button>{isEditing && (<button type="button" onClick={handleResetForm} className="bg-gray-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-gray-600">Batal</button>)}</div>
+            </form>
+            <h3 className="text-xl font-bold mb-2">Daftar Produk</h3>
+            <div className="overflow-x-auto">
+                <table className="min-w-full bg-white rounded-lg shadow">
+                    <thead><tr className="bg-gray-200 text-gray-600 uppercase text-sm leading-normal"><th className="py-3 px-6 text-left">Nama</th><th className="py-3 px-6 text-left">Harga</th><th className="py-3 px-6 text-left">Metode</th><th className="py-3 px-6 text-left">Aksi</th></tr></thead>
+                    <tbody className="text-gray-600 text-sm font-light">
+                        {products.map(p => (<tr key={p.id} className="border-b border-gray-200 hover:bg-gray-100"><td className="py-3 px-6 text-left">{p.name}</td><td className="py-3 px-6 text-left">Rp {p.price.toLocaleString('id-ID')}</td><td className="py-3 px-6 text-left">{p.calculationMethod}</td><td className="py-3 px-6 text-left"><button onClick={() => handleEditProduct(p)} className="text-blue-500 mr-2">Edit</button><button onClick={() => setModal({ show: true, action: () => handleDeleteProduct(p.id), itemId: p.id })} className="text-red-500">Hapus</button></td></tr>))}
+                    </tbody>
+                </table>
+            </div>
+            <Modal show={modal.show} title="Konfirmasi Hapus" message="Yakin ingin menghapus produk ini?" onConfirm={modal.action} onCancel={() => setModal({ show: false, action: null, itemId: null })} />
+        </div>
+    );
+};
+
+const StoreManagementPage = () => {
+    const { db, appId, storeSettings } = useContext(AppContext);
+    const [formData, setFormData] = useState({});
+    const [message, setMessage] = useState('');
+
+    useEffect(() => {
+        if (storeSettings) {
+            setFormData(storeSettings);
+        }
+    }, [storeSettings]);
+
+    const handleChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleImageUpload = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                setFormData(prev => ({ ...prev, logoUrl: reader.result }));
+            };
+            reader.readAsDataURL(file);
+        }
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!db) return;
+        try {
+            const storeSettingsRef = doc(db, `artifacts/${appId}/public/data/storeSettings`, 'main');
+            await setDoc(storeSettingsRef, formData, { merge: true });
+            setMessage('Pengaturan toko berhasil disimpan!');
+            setTimeout(() => setMessage(''), 3000);
+        } catch (error) {
+            console.error("Error saving store settings:", error);
+            setMessage('Gagal menyimpan pengaturan toko.');
+        }
+    };
+
+    return (
+        <div className="bg-white rounded-xl shadow-lg p-6">
+            <h2 className="text-2xl font-bold mb-4">Manajemen Toko</h2>
+            {message && <div className="bg-green-100 text-green-700 p-3 rounded-lg mb-4">{message}</div>}
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                    <label className="block text-gray-700">Nama Toko</label>
+                    <input type="text" name="storeName" value={formData.storeName || ''} onChange={handleChange} className="w-full p-2 border border-gray-300 rounded-lg" />
+                </div>
+                <div>
+                    <label className="block text-gray-700">Alamat</label>
+                    <input type="text" name="address" value={formData.address || ''} onChange={handleChange} className="w-full p-2 border border-gray-300 rounded-lg" />
+                </div>
+                <div>
+                    <label className="block text-gray-700">Nomor Telepon</label>
+                    <input type="text" name="phone" value={formData.phone || ''} onChange={handleChange} className="w-full p-2 border border-gray-300 rounded-lg" />
+                </div>
+                <div>
+                    <label className="block text-gray-700">Catatan Struk</label>
+                    <textarea name="receiptNotes" value={formData.receiptNotes || ''} onChange={handleChange} className="w-full p-2 border border-gray-300 rounded-lg" rows="3"></textarea>
+                </div>
+                <div>
+                    <label className="block text-gray-700">Logo Toko</label>
+                    <input type="file" accept="image/*" onChange={handleImageUpload} className="w-full p-2 border border-gray-300 rounded-lg" />
+                    {formData.logoUrl && <img src={formData.logoUrl} alt="Logo Preview" className="mt-4 max-h-24" />}
+                </div>
+                <button type="submit" className="w-full bg-blue-500 text-white font-bold py-2 rounded-lg hover:bg-blue-600 transition-colors">Simpan Pengaturan</button>
+            </form>
+        </div>
+    );
+};
